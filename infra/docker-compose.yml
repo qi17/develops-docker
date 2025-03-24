@@ -15,10 +15,11 @@ services:
     restart: always
 
   redis:
-    image: registry-vpc.cn-guangzhou.aliyuncs.com/kx-infra/redis:6.2.7
+    image: registry.cn-guangzhou.aliyuncs.com/root-pandora/redis:6.2.17
     container_name: redis
     volumes:
       - ./redis/conf.d:/etc/redis
+      - /data/redis:/data
     ports:
       - "6379:6379"
     restart: always
