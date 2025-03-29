@@ -18,29 +18,31 @@ services:
     image: registry.cn-guangzhou.aliyuncs.com/root-pandora/redis:6.2.17
     container_name: redis
     volumes:
-      - ./redis/conf.d:/etc/redis
       - /data/redis:/data
+      - ./redis/conf.d:/etc/redis
     ports:
       - "6379:6379"
     restart: always
 
-
-
-  elasticsearch:
-    image: registry-vpc.cn-guangzhou.aliyuncs.com/kx-infra/elasticsearch:8.14.1
-    container_name: elasticsearch
-    volumes:
-      - ./elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
-      - /data/elasticsearch:/usr/share/elasticsearch/data
-    environment:
-      - node.name=kx-infra-elasticsearch
-      - ES_JAVA_OPTS=-Xms512m -Xmx1024m
-      - xpack.security.enabled=false
-      - discovery.type=single-node
-      - TZ=Asia/Shanghai
-    ports:
-      - "9200:9200"
-      - "9300:9300"
+  minio:
+    image: registry.cn-guangzhou.aliyuncs.com/root-pandora/minio
+    container_name: minio
     restart: always
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"  # Minio API端口
+      - "9001:9001"  # Minio 控制台端口
+    environment:
+      - MINIO_ROOT_USER=root
+      - MINIO_ROOT_PASSWORD=qch@123456
+    volumes:
+      - /data/minio:/data  # 使用相对路径和数据卷
+    networks:
+      - minio-net
+
+networks:
+  minio-net:
+    driver: bridge
+
 
 
