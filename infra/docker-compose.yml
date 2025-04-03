@@ -3,17 +3,24 @@ version: "3"
 services:
   mysql:
     image: registry.cn-guangzhou.aliyuncs.com/root-pandora/mysql:8.0
+    restart: always
     container_name: mysql
+    command: --default-authentication-plugin=mysql_native_password
     environment:
-      - TZ=Asia/Shanghai
-      - MYSQL_ROOT_PASSWORD='qch@123456'
+      - MYSQL_ROOT_PASSWORD=qch@123456
+      - MYSQL_USER=pandora
+      - MYSQL_PASSWORD=qch@123456
+      - MYSQL_DATABASE=pandora
     ports:
-      - "3306:3306"
+      - 3306:3306
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
     volumes:
       - /data/mysql/conf.d:/etc/mysql/conf.d
-      - /data/mysql/logs:/logs
-      - /data/mysql:/var/lib/mysql
-    restart: always
+      - /data/mysql/data:/var/lib/mysql
 
   redis:
     image: registry.cn-guangzhou.aliyuncs.com/root-pandora/redis:6.2.17
