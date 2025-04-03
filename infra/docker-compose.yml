@@ -21,14 +21,14 @@ services:
         max-size: "50m"
         max-file: "10"
     volumes:
-      - ${PATH_PREFIX}/mysql/conf.d:/etc/mysql/conf.d
+      - ./mysql/conf.d:/etc/mysql/conf.d
       - ${PATH_PREFIX}/mysql/data:/var/lib/mysql
 
   redis:
     image: registry.cn-guangzhou.aliyuncs.com/root-pandora/redis:6.2.17
     container_name: redis
     volumes:
-      - /data/redis:/data
+      - ${PATH_PREFIX}/redis:/data
       - ./redis/conf.d:/etc/redis
     ports:
       - "6379:6379"
@@ -46,7 +46,7 @@ services:
       - MINIO_ROOT_USER=root
       - MINIO_ROOT_PASSWORD=qch@123456
     volumes:
-      - /data/minio:/data  # 使用相对路径和数据卷
+      - ${PATH_PREFIX}/minio:/data  # 使用相对路径和数据卷
     networks:
       - minio-net
 
