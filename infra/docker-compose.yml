@@ -5,13 +5,14 @@ services:
     image: registry.cn-guangzhou.aliyuncs.com/root-pandora/mysql:8.0
     container_name: mysql
     environment:
-      - MYSQL_RANDOM_ROOT_PASSWORD=true
       - TZ=Asia/Shanghai
-    volumes:
-      - /data/mysql:/var/lib/mysql
-      - ./mysql/conf.d/:/etc/mysql/conf.d
+      - MYSQL_ROOT_PASSWORD='qch@123456'
     ports:
       - "3306:3306"
+    volumes:
+      - /data/mysql/conf.d:/etc/mysql/conf.d
+      - /data/mysql/logs:/logs
+      - /data/mysql:/var/lib/mysql
     restart: always
 
   redis:
