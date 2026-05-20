@@ -34,6 +34,26 @@ services:
       - "6379:6379"
     restart: always
 
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_USER=root
+      - POSTGRES_PASSWORD=qch@123456
+    ports:
+      - "5432:5432"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+    volumes:
+      - ${PATH_PREFIX}/postgres/data:/var/lib/postgresql/data
+      - ./postgres/init.d:/docker-entrypoint-initdb.d
+
   minio:
     image: registry.cn-guangzhou.aliyuncs.com/root-pandora/minio
     container_name: minio
