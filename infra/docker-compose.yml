@@ -54,25 +54,13 @@ services:
       - ${PATH_PREFIX}/postgres/data:/var/lib/postgresql/data
       - ./postgres/init.d:/docker-entrypoint-initdb.d
 
-  minio:
-    image: registry.cn-guangzhou.aliyuncs.com/root-pandora/minio
-    container_name: minio
-    restart: always
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"  # Minio API端口
-      - "9001:9001"  # Minio 控制台端口
+  flower:
+    image: mher/flower
+    container_name: flower
     environment:
-      - MINIO_ROOT_USER=root
-      - MINIO_ROOT_PASSWORD=qch@123456
-    volumes:
-      - ${PATH_PREFIX}/minio:/data  # 使用相对路径和数据卷
-    networks:
-      - minio-net
-
-networks:
-  minio-net:
-    driver: bridge
-
-
-
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    restart: always
