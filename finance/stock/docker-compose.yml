@@ -1,0 +1,37 @@
+version: '3.8'
+
+x-common: &common
+  # 使用官方镜像，无需本地源码
+  image: zhulinsen/daily_stock_analysis:latest
+  restart: unless-stopped
+  env_file:
+    - ./conf/.env
+  environment:
+    - TZ=Asia/Shanghai
+    - ENV_FILE=/app/data/runtime.env
+    - OPENSSL_armcap=0
+  volumes:
+    - ./data:/app/data
+    - ./logs:/app/logs
+    - ./reports:/app/reports
+    - ./strategies:/app/strategies:ro
+  deploy:
+    resources:
+      limits:
+        memory: 1G
+      reservations:
+        memory: 512M
+
+services:
+  # 定时任务模式
+  analyzer:
+    <<: *common
+    container_name: stock-analyzer
+
+  # FastAPI 模式
+  server:
+    <<: *common
+    container_name: stock-server
+    command: ["python", "main.py", "--serve-only", "--host", "0.0.0.0", "--port", "${API_PORT:-8000}"]
+    ports:
+      - "${API_PORT:-8000}:${API_PORT:-8000}"
