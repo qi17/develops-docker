@@ -15,7 +15,7 @@ SUBSCRIPTIONS = [
     {
         "id": "bilibili",
         "name": "B站动态",
-        "url": os.getenv("BILI_RSS_URL", "http://rsshub:1200/bilibili/user/dynamic/1039576265"),
+        "url": os.getenv("BILI_RSS_URL", "http://rsshub:1200/bilibili/user/dynamic/3707010679835372"),
         "cache_file": os.path.join(DATA_DIR, "last_guid_bilibili.txt"),
         "default_author": "B站UP主",
         "card_header": "📢 【B站动态提醒】{author} 发布了新动态",
