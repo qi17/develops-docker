@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import html
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
@@ -10,27 +11,63 @@ CST = timezone(timedelta(hours=8))
 FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK", "https://open.feishu.cn/open-apis/bot/v2/hook/51d4824e-6b5a-4d35-b3f6-3bc14ef4f0e8")
 DATA_DIR = os.getenv("DATA_DIR", "/data")
 os.makedirs(DATA_DIR, exist_ok=True)
+RSSHUB_BASE_URL = os.getenv("RSSHUB_BASE_URL", "http://rsshub:1200")
 
 SUBSCRIPTIONS = [
     {
         "id": "bilibili",
         "name": "B站动态",
-        "url": os.getenv("BILI_RSS_URL", "http://rsshub:1200/bilibili/user/dynamic/1039576265"),
+        "url": os.getenv("BILI_RSS_URL", f"{RSSHUB_BASE_URL}/bilibili/user/dynamic/1039576265"),
         "cache_file": os.path.join(DATA_DIR, "last_guid_bilibili.txt"),
         "default_author": "B站UP主",
         "card_header": "📢 【B站动态提醒】{author} 发布了新动态",
         "card_color": "blue"
-    },
-    {
-        "id": "twitter",
-        "name": "𝕏/Twitter",
-        "url": os.getenv("X_RSS_URL", "http://rsshub:1200/twitter/user/Sanchesssmith"),
-        "cache_file": os.path.join(DATA_DIR, "last_guid_twitter.txt"),
-        "default_author": "Sanchesssmith",
-        "card_header": "📢 【𝕏/Twitter 动态提醒】{author} 发布了新推文",
-        "card_color": "blue"
     }
 ]
+
+# 动态配置 X (Twitter) 订阅列表
+# 支持通过环境变量 X_USERS 逗号分隔配置多个用户或链接（如 "Sanchesssmith,wr0789" 或完整链接）
+x_users_env = os.getenv("X_USERS")
+if not x_users_env:
+    legacy_x = os.getenv("X_RSS_URL")
+    if legacy_x:
+        x_users_raw = f"{legacy_x},wr0789"
+    else:
+        x_users_raw = "Sanchesssmith,wr0789"
+else:
+    x_users_raw = x_users_env
+
+x_user_items = [u.strip() for u in x_users_raw.split(",") if u.strip()]
+
+for u_raw in x_user_items:
+    m = re.search(r'(?:twitter\.com|x\.com)/([a-zA-Z0-9_]+)', u_raw)
+    if m:
+        username = m.group(1)
+        rss_url = f"{RSSHUB_BASE_URL}/twitter/user/{username}"
+    elif "/twitter/user/" in u_raw:
+        m_rss = re.search(r'/twitter/user/([a-zA-Z0-9_]+)', u_raw)
+        username = m_rss.group(1) if m_rss else u_raw
+        rss_url = u_raw
+    else:
+        username = u_raw
+        rss_url = f"{RSSHUB_BASE_URL}/twitter/user/{username}"
+
+    # 保持历史旧缓存文件兼容: Sanchesssmith 使用 last_guid_twitter.txt
+    if username.lower() == "sanchesssmith":
+        cache_filename = "last_guid_twitter.txt"
+    else:
+        cache_filename = f"last_guid_twitter_{username.lower()}.txt"
+
+    SUBSCRIPTIONS.append({
+        "id": f"twitter_{username.lower()}",
+        "name": f"𝕏/{username}",
+        "url": rss_url,
+        "cache_file": os.path.join(DATA_DIR, cache_filename),
+        "default_author": username,
+        "card_header": "📢 【𝕏/Twitter 动态提醒】{author} 发布了新推文",
+        "card_color": "blue"
+    })
+
 
 def log(msg, tag="系统"):
     now_str = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
@@ -72,7 +109,8 @@ def save_last_guid(cache_file, guid):
 def clean_html(raw_html):
     if not raw_html:
         return ""
-    text = re.sub(r'<br\s*/?>', '\n', raw_html, flags=re.IGNORECASE)
+    text = html.unescape(raw_html)
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'</p>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'<[^>]+>', '', text)
     return text.strip()
