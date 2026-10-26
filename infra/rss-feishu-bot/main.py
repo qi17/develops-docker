@@ -12,6 +12,9 @@ FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK", "https://open.feishu.cn/open-apis/b
 DATA_DIR = os.getenv("DATA_DIR", "/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 RSSHUB_BASE_URL = os.getenv("RSSHUB_BASE_URL", "http://rsshub:1200")
+
+# 连续失败阈值：必须连续失败 3 次（约 3 分钟以上）才判定为真正故障并报警，避免偶发抖动频繁弹窗
+ALERT_FAIL_THRESHOLD = int(os.getenv("ALERT_FAIL_THRESHOLD", "3"))
 ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "1800"))  # 持续异常时每 30 分钟最多提醒一次
 
 SUBSCRIPTIONS = [
@@ -322,25 +325,32 @@ def handle_subscription_error(sub, error_type, detail):
     tracker["fail_count"] += 1
     duration_str = format_duration(now - tracker["first_fail_time"])
 
-    # 首次失败立即发告警；后续每隔 ALERT_COOLDOWN_SECONDS 发送一次提醒，避免刷屏
+    # 关键防抖逻辑：
+    # 偶发 1~2 次失败（可能是源站轻微抖动、空数据缓存等）不告警，仅后台打日志。
+    # 只有连续失败达到 ALERT_FAIL_THRESHOLD (默认 3 次) 时，才首次向飞书发送报警。
     should_alert = False
-    if not tracker["is_alerted"]:
-        should_alert = True
-    elif now - tracker["last_alert_time"] >= ALERT_COOLDOWN_SECONDS:
-        should_alert = True
+    if tracker["fail_count"] >= ALERT_FAIL_THRESHOLD:
+        if not tracker["is_alerted"]:
+            should_alert = True
+        elif now - tracker["last_alert_time"] >= ALERT_COOLDOWN_SECONDS:
+            should_alert = True
 
     if should_alert:
         send_feishu_error_card(sub, error_type, detail, tracker["fail_count"], duration_str)
         tracker["last_alert_time"] = now
         tracker["is_alerted"] = True
     else:
-        log(f"⚠️ 订阅持续异常中 (第 {tracker['fail_count']} 次失败，告警冷却中): {error_type} - {detail[:80]}", tag=tag)
+        if tracker["fail_count"] < ALERT_FAIL_THRESHOLD:
+            log(f"⚠️ 遇到偶发抖动 (连续失败 {tracker['fail_count']}/{ALERT_FAIL_THRESHOLD} 次，暂不触发飞书告警): {error_type}", tag=tag)
+        else:
+            log(f"⚠️ 订阅持续异常中 (第 {tracker['fail_count']} 次失败，告警冷却中): {error_type} - {detail[:80]}", tag=tag)
 
 def handle_subscription_success(sub):
     sub_id = sub["id"]
     tag = sub["name"]
     if sub_id in ERROR_TRACKER:
         tracker = ERROR_TRACKER.pop(sub_id)
+        # 只有在之前确实触发过报警（连续失败 >= 3 次）的情况下，恢复时才推送恢复通知
         if tracker.get("is_alerted"):
             duration_str = format_duration(time.time() - tracker["first_fail_time"])
             log(f"🎉 订阅源故障已恢复！共失败 {tracker['fail_count']} 次，持续 {duration_str}", tag=tag)
@@ -349,8 +359,28 @@ def handle_subscription_success(sub):
 def check_subscription(sub):
     last_guid = load_last_guid(sub["cache_file"])
     tag = sub["name"]
+    
+    # 增加即时轻量重试（遇到 503/412 时停顿 1 秒再试一次，缓解源站瞬间频控）
+    max_retries = 2
+    res = None
+    for attempt in range(max_retries):
+        try:
+            res = requests.get(sub["url"], timeout=15)
+            if res.status_code == 200:
+                break
+            if attempt < max_retries - 1:
+                time.sleep(1.5)
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(1.5)
+            else:
+                pass
+
     try:
-        res = requests.get(sub["url"], timeout=15)
+        if res is None:
+            handle_subscription_error(sub, "网络连接失败", "请求未收到任何响应")
+            return
+
         if res.status_code != 200:
             error_msg = f"HTTP {res.status_code}"
             log(f"❌ 获取 RSS 失败: {error_msg}, 响应: {res.text[:100]}", tag=tag)
