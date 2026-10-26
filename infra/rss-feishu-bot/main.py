@@ -12,6 +12,7 @@ FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK", "https://open.feishu.cn/open-apis/b
 DATA_DIR = os.getenv("DATA_DIR", "/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 RSSHUB_BASE_URL = os.getenv("RSSHUB_BASE_URL", "http://rsshub:1200")
+ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "1800"))  # 持续异常时每 30 分钟最多提醒一次
 
 SUBSCRIPTIONS = [
     {
@@ -26,7 +27,6 @@ SUBSCRIPTIONS = [
 ]
 
 # 动态配置 X (Twitter) 订阅列表
-# 支持通过环境变量 X_USERS 逗号分隔配置多个用户或链接（如 "Sanchesssmith,wr0789" 或完整链接）
 x_users_env = os.getenv("X_USERS")
 if not x_users_env:
     legacy_x = os.getenv("X_RSS_URL")
@@ -52,7 +52,6 @@ for u_raw in x_user_items:
         username = u_raw
         rss_url = f"{RSSHUB_BASE_URL}/twitter/user/{username}"
 
-    # 保持历史旧缓存文件兼容: Sanchesssmith 使用 last_guid_twitter.txt
     if username.lower() == "sanchesssmith":
         cache_filename = "last_guid_twitter.txt"
     else:
@@ -68,6 +67,8 @@ for u_raw in x_user_items:
         "card_color": "blue"
     })
 
+# 异常状态追踪器，防止刷屏：{sub_id: {"fail_count": 0, "first_fail_time": float, "last_alert_time": float, "is_alerted": False}}
+ERROR_TRACKER = {}
 
 def log(msg, tag="系统"):
     now_str = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
@@ -114,6 +115,17 @@ def clean_html(raw_html):
     text = re.sub(r'</p>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'<[^>]+>', '', text)
     return text.strip()
+
+def format_duration(seconds):
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}秒"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}分钟"
+    hours = minutes // 60
+    rem_min = minutes % 60
+    return f"{hours}小时{rem_min}分钟" if rem_min else f"{hours}小时"
 
 def send_feishu_card(sub, title, author, link, pub_date, description=""):
     clean_desc = clean_html(description)
@@ -167,24 +179,196 @@ def send_feishu_card(sub, title, author, link, pub_date, description=""):
     except Exception as e:
         log(f"❌ 推送飞书发生网络异常: {e}", tag=sub["name"])
 
+def send_feishu_error_card(sub, error_type, detail, fail_count, duration_str):
+    now_str = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
+    sub_name = sub.get("name", sub.get("id", "未知源"))
+    sub_url = sub.get("url", "")
+    
+    clean_detail = clean_html(detail)
+    if len(clean_detail) > 300:
+        clean_detail = clean_detail[:297] + "..."
+    if not clean_detail:
+        clean_detail = "无详细错误响应"
+
+    elements = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": (
+                    f"**📌 订阅源**：{sub_name}\n"
+                    f"**⚠️ 异常类型**：<font color='red'>**{error_type}**</font>\n"
+                    f"**🔢 失败统计**：连续失败 **{fail_count}** 次 (已持续 {duration_str})\n"
+                    f"**⏰ 告警时间**：{now_str}\n\n"
+                    f"**📝 错误信息**：\n```text\n{clean_detail}\n```"
+                )
+            }
+        }
+    ]
+
+    if sub_url.startswith("http"):
+        elements.append({
+            "tag": "action",
+            "actions": [
+                {
+                    "tag": "button",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": "🔍 诊断 RSS 源地址"
+                    },
+                    "type": "danger",
+                    "url": sub_url
+                }
+            ]
+        })
+
+    payload = {
+        "msg_type": "interactive",
+        "card": {
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": f"🚨 【RSS 订阅异常告警】{sub_name}"
+                },
+                "template": "red"
+            },
+            "elements": elements
+        }
+    }
+
+    try:
+        res = requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
+        if res.status_code == 200:
+            log(f"🚨 飞书异常告警卡片发送成功 (已连续失败 {fail_count} 次)", tag=sub_name)
+        else:
+            log(f"❌ 飞书异常告警卡片发送失败: {res.status_code} {res.text}", tag=sub_name)
+    except Exception as e:
+        log(f"❌ 发送异常告警网络出错: {e}", tag=sub_name)
+
+def send_feishu_recovery_card(sub, fail_count, duration_str):
+    now_str = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
+    sub_name = sub.get("name", sub.get("id", "未知源"))
+    sub_url = sub.get("url", "")
+
+    elements = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": (
+                    f"**📌 订阅源**：{sub_name}\n"
+                    f"**🎉 状态**：<font color='green'>**已恢复正常**</font>\n"
+                    f"**📊 故障回顾**：此前连续失败 **{fail_count}** 次，历时约 **{duration_str}**\n"
+                    f"**⏰ 恢复时间**：{now_str}\n\n"
+                    f"机器人已重新接入最新内容流，后续将继续正常监控更新。"
+                )
+            }
+        }
+    ]
+
+    if sub_url.startswith("http"):
+        elements.append({
+            "tag": "action",
+            "actions": [
+                {
+                    "tag": "button",
+                    "text": {
+                        "tag": "plain_text",
+                        "content": "🔗 打开订阅源"
+                    },
+                    "type": "primary",
+                    "url": sub_url
+                }
+            ]
+        })
+
+    payload = {
+        "msg_type": "interactive",
+        "card": {
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": f"✅ 【RSS 订阅源已恢复】{sub_name}"
+                },
+                "template": "green"
+            },
+            "elements": elements
+        }
+    }
+
+    try:
+        res = requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
+        if res.status_code == 200:
+            log("✅ 飞书恢复通知卡片发送成功!", tag=sub_name)
+        else:
+            log(f"❌ 飞书恢复通知卡片发送失败: {res.status_code} {res.text}", tag=sub_name)
+    except Exception as e:
+        log(f"❌ 发送恢复通知网络出错: {e}", tag=sub_name)
+
+def handle_subscription_error(sub, error_type, detail):
+    sub_id = sub["id"]
+    tag = sub["name"]
+    now = time.time()
+
+    if sub_id not in ERROR_TRACKER:
+        ERROR_TRACKER[sub_id] = {
+            "fail_count": 0,
+            "first_fail_time": now,
+            "last_alert_time": 0,
+            "is_alerted": False
+        }
+
+    tracker = ERROR_TRACKER[sub_id]
+    tracker["fail_count"] += 1
+    duration_str = format_duration(now - tracker["first_fail_time"])
+
+    # 首次失败立即发告警；后续每隔 ALERT_COOLDOWN_SECONDS 发送一次提醒，避免刷屏
+    should_alert = False
+    if not tracker["is_alerted"]:
+        should_alert = True
+    elif now - tracker["last_alert_time"] >= ALERT_COOLDOWN_SECONDS:
+        should_alert = True
+
+    if should_alert:
+        send_feishu_error_card(sub, error_type, detail, tracker["fail_count"], duration_str)
+        tracker["last_alert_time"] = now
+        tracker["is_alerted"] = True
+    else:
+        log(f"⚠️ 订阅持续异常中 (第 {tracker['fail_count']} 次失败，告警冷却中): {error_type} - {detail[:80]}", tag=tag)
+
+def handle_subscription_success(sub):
+    sub_id = sub["id"]
+    tag = sub["name"]
+    if sub_id in ERROR_TRACKER:
+        tracker = ERROR_TRACKER.pop(sub_id)
+        if tracker.get("is_alerted"):
+            duration_str = format_duration(time.time() - tracker["first_fail_time"])
+            log(f"🎉 订阅源故障已恢复！共失败 {tracker['fail_count']} 次，持续 {duration_str}", tag=tag)
+            send_feishu_recovery_card(sub, tracker["fail_count"], duration_str)
+
 def check_subscription(sub):
     last_guid = load_last_guid(sub["cache_file"])
     tag = sub["name"]
     try:
         res = requests.get(sub["url"], timeout=15)
         if res.status_code != 200:
-            log(f"❌ 获取 RSS 失败，HTTP 状态码: {res.status_code}, 响应: {res.text[:100]}", tag=tag)
+            error_msg = f"HTTP {res.status_code}"
+            log(f"❌ 获取 RSS 失败: {error_msg}, 响应: {res.text[:100]}", tag=tag)
+            handle_subscription_error(sub, f"HTTP {res.status_code} 状态异常", res.text[:300])
             return
         
         root = ET.fromstring(res.text)
         channel = root.find("channel")
         if channel is None:
-            log("⚠️ RSS 格式错误: 未找到 <channel>", tag=tag)
+            err_detail = "返回 XML 中未包含 <channel> 根节点"
+            log(f"⚠️ RSS 格式错误: {err_detail}", tag=tag)
+            handle_subscription_error(sub, "RSS 内容格式解析失败", err_detail)
             return
             
         items = channel.findall("item")
         if not items:
             log("ℹ️ RSS 无内容条目", tag=tag)
+            handle_subscription_success(sub)
             return
             
         latest_item = items[0]
@@ -194,6 +378,9 @@ def check_subscription(sub):
         pub_date = latest_item.find("pubDate").text if latest_item.find("pubDate") is not None else ""
         author = latest_item.find("author").text if latest_item.find("author") is not None else sub["default_author"]
         description = latest_item.find("description").text if latest_item.find("description") is not None else ""
+
+        # 走到这里代表 RSS 请求和解析完全成功，检查并触发恢复逻辑
+        handle_subscription_success(sub)
 
         short_title = title.replace('\n', ' ')
         if len(short_title) > 30:
@@ -211,8 +398,15 @@ def check_subscription(sub):
         else:
             log(f"💤 暂无更新 (最新: 『{short_title}』)", tag=tag)
             
+    except requests.exceptions.RequestException as e:
+        log(f"❌ 请求 RSS 发生网络异常: {e}", tag=tag)
+        handle_subscription_error(sub, f"网络请求异常 ({type(e).__name__})", str(e))
+    except ET.ParseError as e:
+        log(f"❌ RSS XML 解析失败: {e}", tag=tag)
+        handle_subscription_error(sub, "XML 语法解析失败", str(e))
     except Exception as e:
-        log(f"❌ 检查更新发生异常: {e}", tag=tag)
+        log(f"❌ 检查更新发生未知异常: {e}", tag=tag)
+        handle_subscription_error(sub, f"系统未知异常 ({type(e).__name__})", str(e))
 
 if __name__ == "__main__":
     log("🚀 聚合版 RSS 飞书智能轮询服务已启动！")
