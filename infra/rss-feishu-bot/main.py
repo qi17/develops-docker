@@ -13,8 +13,8 @@ DATA_DIR = os.getenv("DATA_DIR", "/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 RSSHUB_BASE_URL = os.getenv("RSSHUB_BASE_URL", "http://rsshub:1200")
 
-# 连续失败阈值：必须连续失败 3 次（约 3 分钟以上）才判定为真正故障并报警，避免偶发抖动频繁弹窗
-ALERT_FAIL_THRESHOLD = int(os.getenv("ALERT_FAIL_THRESHOLD", "3"))
+# 连续失败阈值
+ALERT_FAIL_THRESHOLD = int(os.getenv("ALERT_FAIL_THRESHOLD", "5"))
 ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "1800"))  # 持续异常时每 30 分钟最多提醒一次
 
 SUBSCRIPTIONS = [
